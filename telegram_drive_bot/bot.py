@@ -1,4 +1,5 @@
 import asyncio
+import base64
 import mimetypes
 import os
 import re
@@ -21,6 +22,7 @@ ALLOWED_USER_IDS = {int(x.strip()) for x in os.getenv("ALLOWED_USER_IDS", "").sp
 DOWNLOAD_DIR = Path(os.getenv("DOWNLOAD_DIR", "downloads"))
 MAX_FILE_MB = int(os.getenv("MAX_FILE_MB", "2048") or "2048")
 FORMAT_LIMIT = int(os.getenv("FORMAT_LIMIT", "12") or "12")
+YOUTUBE_COOKIE_FILE = Path(os.getenv("YOUTUBE_COOKIE_FILE", "/tmp/youtube-cookies.txt"))
 
 JOBS = {}
 
@@ -31,11 +33,27 @@ BLOCKED_TERMS = {
 }
 
 ALLOWED_SCHEMES = {"http", "https"}
+YOUTUBE_HOSTS = {
+    "youtube.com", "www.youtube.com", "m.youtube.com", "music.youtube.com",
+    "youtu.be", "youtube-nocookie.com", "www.youtube-nocookie.com",
+}
 
 
 def allowed(update: Update) -> bool:
     user = update.effective_user
     return bool(user) and (not ALLOWED_USER_IDS or user.id in ALLOWED_USER_IDS)
+
+
+def host_matches(host: str, allowed_hosts: set[str]) -> bool:
+    host = (host or "").lower().strip()
+    return any(host == item or host.endswith("." + item) for item in allowed_hosts)
+
+
+def is_youtube_url(url: str) -> bool:
+    try:
+        return host_matches(urlparse(url).netloc, YOUTUBE_HOSTS)
+    except Exception:
+        return False
 
 
 def looks_like_url(text: str) -> bool:
@@ -61,12 +79,42 @@ def file_size_mb(path: str) -> float:
     return os.path.getsize(path) / 1024 / 1024
 
 
+def prepare_youtube_cookie_file() -> str | None:
+    existing = os.getenv("YOUTUBE_COOKIEFILE", "").strip()
+    if existing:
+        return existing
+
+    text = os.getenv("YOUTUBE_COOKIES_TEXT", "").strip()
+    b64 = os.getenv("YOUTUBE_COOKIES_B64", "").strip()
+    if b64:
+        text = base64.b64decode(b64.encode("utf-8")).decode("utf-8")
+
+    if not text:
+        return None
+
+    YOUTUBE_COOKIE_FILE.parent.mkdir(parents=True, exist_ok=True)
+    YOUTUBE_COOKIE_FILE.write_text(text, encoding="utf-8")
+    return str(YOUTUBE_COOKIE_FILE)
+
+
+def ydl_extra_opts(url: str) -> dict:
+    if not is_youtube_url(url):
+        return {}
+
+    opts = {}
+    cookiefile = prepare_youtube_cookie_file()
+    if cookiefile:
+        opts["cookiefile"] = cookiefile
+    return opts
+
+
 def extract_info(url: str):
     opts = {
         "quiet": True,
         "no_warnings": True,
         "skip_download": True,
         "noplaylist": True,
+        **ydl_extra_opts(url),
     }
     with YoutubeDL(opts) as ydl:
         return ydl.extract_info(url, download=False)
@@ -135,6 +183,7 @@ def download_video(url: str, fmt_id: str, workdir: str):
         "quiet": True,
         "no_warnings": True,
         "restrictfilenames": True,
+        **ydl_extra_opts(url),
     }
     with YoutubeDL(opts) as ydl:
         info = ydl.extract_info(url, download=True)
