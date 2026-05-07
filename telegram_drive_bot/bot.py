@@ -143,24 +143,55 @@ def quality_label(fmt: dict) -> str:
     height = fmt.get("height")
     width = fmt.get("width")
     fps = fmt.get("fps")
+    tbr = fmt.get("tbr")
+    vbr = fmt.get("vbr")
+    abr = fmt.get("abr")
     filesize = fmt.get("filesize") or fmt.get("filesize_approx")
     acodec = fmt.get("acodec")
     vcodec = fmt.get("vcodec")
 
-    parts = [fmt_id]
+    resolution = fmt.get("resolution")
+    format_note = fmt.get("format_note")
+    format_name = fmt.get("format")
+    quality = fmt.get("quality")
+
+    parts = [str(fmt_id)]
+
     if height:
         parts.append(f"{height}p")
+    elif resolution and resolution != "audio only":
+        parts.append(str(resolution))
+    elif format_note:
+        parts.append(str(format_note))
+    elif format_name:
+        match = re.search(r"(\d{3,4}p|\d{3,4}x\d{3,4})", str(format_name), re.I)
+        if match:
+            parts.append(match.group(1))
     elif width:
         parts.append(f"{width}w")
+    elif quality is not None:
+        parts.append(f"q{quality}")
+
     if fps:
         parts.append(f"{fps}fps")
+
     parts.append(ext)
+
+    if tbr:
+        parts.append(f"{int(tbr)}kbps")
+    elif vbr:
+        parts.append(f"v{int(vbr)}kbps")
+    elif abr:
+        parts.append(f"a{int(abr)}kbps")
+
     if vcodec == "none":
-        parts.append("audio")
+        parts.append("audio-only")
     elif acodec == "none":
         parts.append("video-only")
+
     if filesize:
         parts.append(f"{filesize / 1024 / 1024:.1f}MB")
+
     return " | ".join(str(x) for x in parts if x)
 
 
@@ -173,16 +204,35 @@ def candidate_formats(info: dict):
         fmt_id = fmt.get("format_id")
         if not fmt_id or fmt_id in seen:
             continue
-        if fmt.get("vcodec") == "none":
-            continue
-        height = fmt.get("height") or 0
+
         ext = fmt.get("ext") or ""
         if ext in {"mhtml", "storyboard"}:
             continue
+
+        if fmt.get("vcodec") == "none":
+            continue
+
         seen.add(fmt_id)
         out.append(fmt)
 
-    out.sort(key=lambda f: (f.get("height") or 0, f.get("tbr") or 0), reverse=True)
+    def score(f: dict):
+        height = f.get("height") or 0
+        tbr = f.get("tbr") or f.get("vbr") or 0
+        filesize = f.get("filesize") or f.get("filesize_approx") or 0
+
+        numeric_id = 0
+        try:
+            numeric_id = int(str(f.get("format_id", "")).strip())
+        except Exception:
+            numeric_id = 0
+
+        quality = f.get("quality")
+        if quality is None:
+            quality = numeric_id
+
+        return (height, tbr, quality, filesize)
+
+    out.sort(key=score, reverse=True)
     return out[:FORMAT_LIMIT]
 
 
