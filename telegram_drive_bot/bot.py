@@ -37,6 +37,7 @@ YOUTUBE_HOSTS = {
     "youtube.com", "www.youtube.com", "m.youtube.com", "music.youtube.com",
     "youtu.be", "youtube-nocookie.com", "www.youtube-nocookie.com",
 }
+YOUTUBE_HEIGHTS = (2160, 1440, 1080, 720, 480, 360, 240, 144)
 
 
 def allowed(update: Update) -> bool:
@@ -114,8 +115,6 @@ def extract_info(url: str):
         "no_warnings": True,
         "skip_download": True,
         "noplaylist": True,
-        # Info-reading should not fail just because yt-dlp cannot resolve a
-        # default format. We only need metadata and the raw formats list here.
         "ignore_no_formats_error": True,
         **ydl_extra_opts(url),
     }
@@ -178,10 +177,11 @@ def build_format_selector(fmt_id: str) -> str:
     if fmt_id == "best":
         return "bv*+ba/b"
 
+    if fmt_id.startswith("height_"):
+        height = int(fmt_id.removeprefix("height_"))
+        return f"bv*[height<={height}]+ba/b[height<={height}]/bv*+ba/b"
+
     safe_fmt = str(fmt_id).replace("/", "").replace("\\", "")
-    # Some sites expose combined formats, while YouTube often exposes video-only
-    # formats. Try selected video + best audio first, then selected format alone,
-    # then progressively safer fallbacks.
     return f"{safe_fmt}+ba/{safe_fmt}/bv*+ba/b"
 
 
@@ -221,6 +221,20 @@ def download_video(url: str, fmt_id: str, workdir: str):
         return find_downloaded_file(info, workdir, ydl), info
 
 
+def build_quality_buttons(url: str, info: dict) -> list[list[InlineKeyboardButton]]:
+    buttons = [[InlineKeyboardButton("Best", callback_data="fmt:best")]]
+
+    if is_youtube_url(url):
+        for height in YOUTUBE_HEIGHTS:
+            buttons.append([InlineKeyboardButton(f"{height}p", callback_data=f"fmt:height_{height}")])
+        return buttons
+
+    for fmt in candidate_formats(info):
+        label = quality_label(fmt)
+        buttons.append([InlineKeyboardButton(label[:60], callback_data=f"fmt:{fmt.get('format_id')}")])
+    return buttons
+
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not allowed(update):
         await update.message.reply_text("Access denied.")
@@ -256,14 +270,9 @@ async def handle_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
     key = str(update.effective_user.id)
     JOBS[key] = {"url": url, "title": title}
 
-    buttons = [[InlineKeyboardButton("Best", callback_data="fmt:best")]]
-    for fmt in candidate_formats(info):
-        label = quality_label(fmt)
-        buttons.append([InlineKeyboardButton(label[:60], callback_data=f"fmt:{fmt.get('format_id')}")])
-
     await status.edit_text(
         f"Title: {title}\nSelect quality:",
-        reply_markup=InlineKeyboardMarkup(buttons),
+        reply_markup=InlineKeyboardMarkup(build_quality_buttons(url, info)),
     )
 
 
