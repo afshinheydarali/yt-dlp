@@ -50,9 +50,10 @@ def normalize_url(url: str) -> str:
         return url
 
     host = (parsed.netloc or "").lower()
-    # eporner.video often falls back to the generic extractor and Cloudflare 403.
-    # The canonical domain has a dedicated yt-dlp extractor.
-    if host in {"eporner.video", "www.eporner.video"}:
+    path = parsed.path or ""
+    # Do NOT rewrite /album/ URLs. Some eporner.video album URLs do not exist
+    # on www.eporner.com and rewriting them causes HTTP 404.
+    if host in {"eporner.video", "www.eporner.video"} and not path.startswith("/album/"):
         parsed = parsed._replace(netloc="www.eporner.com")
         return urlunparse(parsed)
     return url
