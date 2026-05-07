@@ -129,6 +129,7 @@ def quality_label(fmt: dict) -> str:
     filesize = fmt.get("filesize") or fmt.get("filesize_approx")
     acodec = fmt.get("acodec")
     vcodec = fmt.get("vcodec")
+    tbr = fmt.get("tbr") or fmt.get("vbr")
 
     parts = [fmt_id]
     if height:
@@ -138,6 +139,8 @@ def quality_label(fmt: dict) -> str:
     if fps:
         parts.append(f"{fps}fps")
     parts.append(ext)
+    if tbr:
+        parts.append(f"{int(tbr)}kbps")
     if vcodec == "none":
         parts.append("audio")
     elif acodec == "none":
@@ -158,25 +161,50 @@ def candidate_formats(info: dict):
             continue
         if fmt.get("vcodec") == "none":
             continue
-        height = fmt.get("height") or 0
         ext = fmt.get("ext") or ""
         if ext in {"mhtml", "storyboard"}:
             continue
         seen.add(fmt_id)
         out.append(fmt)
 
-    out.sort(key=lambda f: (f.get("height") or 0, f.get("tbr") or 0), reverse=True)
+    out.sort(key=lambda f: (f.get("height") or 0, f.get("tbr") or f.get("vbr") or 0), reverse=True)
     return out[:FORMAT_LIMIT]
+
+
+def build_format_selector(fmt_id: str) -> str:
+    if fmt_id == "best":
+        return "bv*+ba/b"
+
+    safe_fmt = str(fmt_id).replace("/", "").replace("\\", "")
+    # Some sites expose combined formats, while YouTube often exposes video-only
+    # formats. Try selected video + best audio first, then selected format alone,
+    # then progressively safer fallbacks.
+    return f"{safe_fmt}+ba/{safe_fmt}/bv*+ba/b"
+
+
+def find_downloaded_file(info: dict, workdir: str, ydl: YoutubeDL) -> str:
+    requested = info.get("requested_downloads") or []
+    for item in requested:
+        filepath = item.get("filepath") or item.get("filename")
+        if filepath and os.path.exists(filepath):
+            return filepath
+
+    filepath = ydl.prepare_filename(info)
+    if os.path.exists(filepath):
+        return filepath
+
+    files = [p for p in Path(workdir).glob("*") if p.is_file()]
+    if files:
+        files.sort(key=lambda p: p.stat().st_size, reverse=True)
+        return str(files[0])
+
+    raise RuntimeError("Downloaded file not found")
 
 
 def download_video(url: str, fmt_id: str, workdir: str):
     outtmpl = os.path.join(workdir, "%(title).100s.%(ext)s")
-    fmt = fmt_id
-    if fmt_id != "best":
-        fmt = f"{fmt_id}+ba/best[format_id={fmt_id}]/best"
-
     opts = {
-        "format": fmt,
+        "format": build_format_selector(fmt_id),
         "outtmpl": outtmpl,
         "merge_output_format": "mp4",
         "noplaylist": True,
@@ -187,17 +215,7 @@ def download_video(url: str, fmt_id: str, workdir: str):
     }
     with YoutubeDL(opts) as ydl:
         info = ydl.extract_info(url, download=True)
-        requested = info.get("requested_downloads") or []
-        if requested and requested[0].get("filepath"):
-            return requested[0]["filepath"], info
-        filepath = ydl.prepare_filename(info)
-        if os.path.exists(filepath):
-            return filepath, info
-        stem = Path(filepath).with_suffix("").name
-        matches = list(Path(workdir).glob(stem + ".*"))
-        if matches:
-            return str(matches[0]), info
-        raise RuntimeError("Downloaded file not found")
+        return find_downloaded_file(info, workdir, ydl), info
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
