@@ -16,4 +16,5 @@ RUN python -m pip install --upgrade pip \
 COPY . .
 
 ENV PYTHONUNBUFFERED=1
-CMD ["python", "-u", "telegram_drive_bot/bot.py"]
+ENV PYTHONPATH=/app
+CMD ["python", "-u", "-m", "telegram_drive_bot.bot"]
