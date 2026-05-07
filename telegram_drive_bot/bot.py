@@ -72,11 +72,9 @@ def ydl_impersonation_opts() -> dict:
         targets = ["chrome"]
 
     # Equivalent to CLI: --extractor-args "generic:impersonate=chrome"
-    # Global impersonate is also set when supported by the installed yt-dlp build.
-    return {
-        "extractor_args": {"generic": {"impersonate": targets}},
-        "impersonate": targets[0],
-    }
+    # Do not set the global `impersonate` option here; some yt-dlp builds assert
+    # when it is passed as a plain string through the Python API.
+    return {"extractor_args": {"generic": {"impersonate": targets}}}
 
 
 def extract_info(url: str):
