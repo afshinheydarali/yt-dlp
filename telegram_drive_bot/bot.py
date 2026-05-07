@@ -25,6 +25,7 @@ FORMAT_LIMIT = int(os.getenv("FORMAT_LIMIT", "12") or "12")
 YOUTUBE_COOKIE_FILE = Path(os.getenv("YOUTUBE_COOKIE_FILE", "/tmp/youtube-cookies.txt"))
 YOUTUBE_PLAYER_CLIENTS = [x.strip() for x in os.getenv("YOUTUBE_PLAYER_CLIENTS", "android,ios,web").split(",") if x.strip()]
 YOUTUBE_JS_RUNTIME = os.getenv("YOUTUBE_JS_RUNTIME", "node").strip()
+YOUTUBE_AUTO_FORMAT = os.getenv("YOUTUBE_AUTO_FORMAT", "mp4").strip() or "mp4"
 
 JOBS = {}
 
@@ -35,7 +36,6 @@ YOUTUBE_HOSTS = {
     "youtube.com", "www.youtube.com", "m.youtube.com", "music.youtube.com",
     "youtu.be", "youtube-nocookie.com", "www.youtube-nocookie.com",
 }
-YOUTUBE_HEIGHTS = (2160, 1440, 1080, 720, 480, 360, 240, 144)
 
 
 def allowed(update: Update) -> bool:
@@ -124,11 +124,14 @@ def extract_info(url: str):
 def quality_label(fmt: dict) -> str:
     fmt_id = fmt.get("format_id") or "best"
     ext = fmt.get("ext") or "?"
+    resolution = fmt.get("resolution")
     height = fmt.get("height")
     fps = fmt.get("fps")
     tbr = fmt.get("tbr") or fmt.get("vbr")
     parts = [fmt_id]
-    if height:
+    if resolution and resolution != "audio only":
+        parts.append(resolution)
+    elif height:
         parts.append(f"{height}p")
     if fps:
         parts.append(f"{fps}fps")
@@ -146,7 +149,7 @@ def candidate_formats(info: dict):
         fmt_id = fmt.get("format_id")
         if not fmt_id or fmt_id in seen:
             continue
-        if fmt.get("vcodec") == "none":
+        if fmt.get("vcodec") == "none" or fmt.get("video_ext") == "none":
             continue
         ext = fmt.get("ext") or ""
         if ext in {"mhtml", "storyboard"}:
@@ -157,18 +160,15 @@ def candidate_formats(info: dict):
     return out[:FORMAT_LIMIT]
 
 
-def youtube_format_selector(fmt_id: str) -> str:
-    if fmt_id == "best":
-        return "bestvideo+bestaudio/best"
-    if fmt_id.startswith("height_"):
-        height = int(fmt_id.removeprefix("height_"))
-        return f"bestvideo[height<={height}]+bestaudio/best[height<={height}]/bestvideo+bestaudio/best"
-    return "bestvideo+bestaudio/best"
-
-
 def build_format_selector(url: str, fmt_id: str) -> str:
     if is_youtube_url(url):
-        return youtube_format_selector(fmt_id)
+        if fmt_id == "best":
+            return "bestvideo+bestaudio/best"
+        if fmt_id == "auto_mp4":
+            return YOUTUBE_AUTO_FORMAT
+        safe_fmt = str(fmt_id).replace("/", "").replace("\\", "")
+        return f"{safe_fmt}+bestaudio/{safe_fmt}/{YOUTUBE_AUTO_FORMAT}/best"
+
     if fmt_id == "best":
         return "bestvideo+bestaudio/best"
     safe_fmt = str(fmt_id).replace("/", "").replace("\\", "")
@@ -211,9 +211,7 @@ def download_video(url: str, fmt_id: str, workdir: str):
 def build_quality_buttons(url: str, info: dict) -> list[list[InlineKeyboardButton]]:
     buttons = [[InlineKeyboardButton("Best", callback_data="fmt:best")]]
     if is_youtube_url(url):
-        for height in YOUTUBE_HEIGHTS:
-            buttons.append([InlineKeyboardButton(f"{height}p", callback_data=f"fmt:height_{height}")])
-        return buttons
+        buttons.append([InlineKeyboardButton("Auto MP4", callback_data="fmt:auto_mp4")])
     for fmt in candidate_formats(info):
         buttons.append([InlineKeyboardButton(quality_label(fmt)[:60], callback_data=f"fmt:{fmt.get('format_id')}")])
     return buttons
