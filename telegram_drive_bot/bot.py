@@ -114,10 +114,9 @@ def extract_info(url: str):
         "no_warnings": True,
         "skip_download": True,
         "noplaylist": True,
-        # Do not let the info-reading step fail just because a default/requested
-        # format is not available. We only need metadata + formats here.
-        "format": None,
-        "listformats": True,
+        # Info-reading should not fail just because yt-dlp cannot resolve a
+        # default format. We only need metadata and the raw formats list here.
+        "ignore_no_formats_error": True,
         **ydl_extra_opts(url),
     }
     with YoutubeDL(opts) as ydl:
