@@ -1,11 +1,12 @@
 import asyncio
+import base64
 import mimetypes
 import os
 import re
 import shutil
 import tempfile
 from pathlib import Path
-from urllib.parse import urlparse
+from urllib.parse import urlparse, urlunparse
 
 from dotenv import load_dotenv
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
@@ -22,6 +23,7 @@ DOWNLOAD_DIR = Path(os.getenv("DOWNLOAD_DIR", "downloads"))
 MAX_FILE_MB = int(os.getenv("MAX_FILE_MB", "2048") or "2048")
 FORMAT_LIMIT = int(os.getenv("FORMAT_LIMIT", "12") or "12")
 YTDLP_IMPERSONATE = os.getenv("YTDLP_IMPERSONATE", "chrome").strip()
+COOKIE_FILE = Path(os.getenv("YTDLP_COOKIE_FILE", "/tmp/yt-dlp-cookies.txt"))
 
 JOBS = {}
 
@@ -37,6 +39,23 @@ ALLOWED_SCHEMES = {"http", "https"}
 def allowed(update: Update) -> bool:
     user = update.effective_user
     return bool(user) and (not ALLOWED_USER_IDS or user.id in ALLOWED_USER_IDS)
+
+
+def normalize_url(url: str) -> str:
+    """Normalize known alternate domains before handing the URL to yt-dlp."""
+    url = (url or "").strip()
+    try:
+        parsed = urlparse(url)
+    except Exception:
+        return url
+
+    host = (parsed.netloc or "").lower()
+    # eporner.video often falls back to the generic extractor and Cloudflare 403.
+    # The canonical domain has a dedicated yt-dlp extractor.
+    if host in {"eporner.video", "www.eporner.video"}:
+        parsed = parsed._replace(netloc="www.eporner.com")
+        return urlunparse(parsed)
+    return url
 
 
 def looks_like_url(text: str) -> bool:
@@ -62,6 +81,34 @@ def file_size_mb(path: str) -> float:
     return os.path.getsize(path) / 1024 / 1024
 
 
+def prepare_cookie_file() -> str | None:
+    """Create a Netscape cookies.txt file from env if provided."""
+    existing = os.getenv("YTDLP_COOKIEFILE", "").strip()
+    if existing:
+        return existing
+
+    text = os.getenv("YTDLP_COOKIES_TEXT", "").strip()
+    b64 = os.getenv("YTDLP_COOKIES_B64", "").strip()
+    if b64:
+        text = base64.b64decode(b64.encode("utf-8")).decode("utf-8")
+
+    if not text:
+        return None
+
+    COOKIE_FILE.parent.mkdir(parents=True, exist_ok=True)
+    COOKIE_FILE.write_text(text, encoding="utf-8")
+    return str(COOKIE_FILE)
+
+
+def ydl_common_opts() -> dict:
+    opts = {}
+    cookiefile = prepare_cookie_file()
+    if cookiefile:
+        opts["cookiefile"] = cookiefile
+    opts.update(ydl_impersonation_opts())
+    return opts
+
+
 def ydl_impersonation_opts() -> dict:
     target = (YTDLP_IMPERSONATE or "").strip()
     if not target or target.lower() in {"0", "false", "off", "none", "no"}:
@@ -83,7 +130,7 @@ def extract_info(url: str):
         "no_warnings": True,
         "skip_download": True,
         "noplaylist": True,
-        **ydl_impersonation_opts(),
+        **ydl_common_opts(),
     }
     with YoutubeDL(opts) as ydl:
         return ydl.extract_info(url, download=False)
@@ -152,7 +199,7 @@ def download_video(url: str, fmt_id: str, workdir: str):
         "quiet": True,
         "no_warnings": True,
         "restrictfilenames": True,
-        **ydl_impersonation_opts(),
+        **ydl_common_opts(),
     }
     with YoutubeDL(opts) as ydl:
         info = ydl.extract_info(url, download=True)
@@ -184,7 +231,7 @@ async def handle_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Access denied.")
         return
 
-    url = (update.message.text or "").strip()
+    url = normalize_url((update.message.text or "").strip())
     if not looks_like_url(url):
         await update.message.reply_text("Send a valid video URL.")
         return
