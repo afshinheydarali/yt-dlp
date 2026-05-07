@@ -24,6 +24,7 @@ MAX_FILE_MB = int(os.getenv("MAX_FILE_MB", "2048") or "2048")
 FORMAT_LIMIT = int(os.getenv("FORMAT_LIMIT", "12") or "12")
 YOUTUBE_COOKIE_FILE = Path(os.getenv("YOUTUBE_COOKIE_FILE", "/tmp/youtube-cookies.txt"))
 YOUTUBE_PLAYER_CLIENTS = [x.strip() for x in os.getenv("YOUTUBE_PLAYER_CLIENTS", "android,ios,web").split(",") if x.strip()]
+YOUTUBE_JS_RUNTIME = os.getenv("YOUTUBE_JS_RUNTIME", "node").strip()
 
 JOBS = {}
 
@@ -101,6 +102,9 @@ def ydl_extra_opts(url: str) -> dict:
         opts["cookiefile"] = cookiefile
     if YOUTUBE_PLAYER_CLIENTS:
         opts["extractor_args"] = {"youtube": {"player_client": YOUTUBE_PLAYER_CLIENTS}}
+    if YOUTUBE_JS_RUNTIME and YOUTUBE_JS_RUNTIME.lower() not in {"0", "false", "off", "none", "no"}:
+        opts["js_runtimes"] = {YOUTUBE_JS_RUNTIME: {"path": YOUTUBE_JS_RUNTIME}}
+        opts["remote_components"] = {"ejs:github"}
     return opts
 
 
