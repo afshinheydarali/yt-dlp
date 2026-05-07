@@ -21,6 +21,7 @@ ALLOWED_USER_IDS = {int(x.strip()) for x in os.getenv("ALLOWED_USER_IDS", "").sp
 DOWNLOAD_DIR = Path(os.getenv("DOWNLOAD_DIR", "downloads"))
 MAX_FILE_MB = int(os.getenv("MAX_FILE_MB", "2048") or "2048")
 FORMAT_LIMIT = int(os.getenv("FORMAT_LIMIT", "12") or "12")
+YTDLP_IMPERSONATE = os.getenv("YTDLP_IMPERSONATE", "chrome").strip()
 
 JOBS = {}
 
@@ -61,12 +62,30 @@ def file_size_mb(path: str) -> float:
     return os.path.getsize(path) / 1024 / 1024
 
 
+def ydl_impersonation_opts() -> dict:
+    target = (YTDLP_IMPERSONATE or "").strip()
+    if not target or target.lower() in {"0", "false", "off", "none", "no"}:
+        return {}
+
+    targets = [part.strip() for part in target.split(",") if part.strip()]
+    if not targets:
+        targets = ["chrome"]
+
+    # Equivalent to CLI: --extractor-args "generic:impersonate=chrome"
+    # Global impersonate is also set when supported by the installed yt-dlp build.
+    return {
+        "extractor_args": {"generic": {"impersonate": targets}},
+        "impersonate": targets[0],
+    }
+
+
 def extract_info(url: str):
     opts = {
         "quiet": True,
         "no_warnings": True,
         "skip_download": True,
         "noplaylist": True,
+        **ydl_impersonation_opts(),
     }
     with YoutubeDL(opts) as ydl:
         return ydl.extract_info(url, download=False)
@@ -135,6 +154,7 @@ def download_video(url: str, fmt_id: str, workdir: str):
         "quiet": True,
         "no_warnings": True,
         "restrictfilenames": True,
+        **ydl_impersonation_opts(),
     }
     with YoutubeDL(opts) as ydl:
         info = ydl.extract_info(url, download=True)
