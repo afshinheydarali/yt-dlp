@@ -1,4 +1,6 @@
+import base64
 import os
+import tempfile
 
 from .common import InfoExtractor
 from ..cookies import YoutubeDLCookieJar
@@ -60,20 +62,77 @@ class EpornerIE(InfoExtractor):
     def _eporner_impersonate(self):
         return self._first_extractor_arg(self._eporner_extractor_args(), 'impersonate')
 
-    def _real_initialize(self):
-        cookiefile = self._first_extractor_arg(self._eporner_extractor_args(), 'cookiefile')
-        if not cookiefile:
-            cookiefile = os.environ.get('YTDLP_EPORNER_COOKIES') or os.environ.get('EPORNER_COOKIES')
-        if not cookiefile:
-            return
+    @staticmethod
+    def _looks_like_cookie_data(cookie_source):
+        return any(marker in cookie_source for marker in ('\n', '\t')) or cookie_source.lstrip().startswith('# Netscape HTTP Cookie File')
 
-        cookiefile = os.path.expanduser(cookiefile)
+    @staticmethod
+    def _normalise_cookie_data(cookie_data):
+        if '\\n' in cookie_data and '\n' not in cookie_data:
+            cookie_data = cookie_data.replace('\\n', '\n')
+        if '\\t' in cookie_data and '\t' not in cookie_data:
+            cookie_data = cookie_data.replace('\\t', '\t')
+        return cookie_data
+
+    def _eporner_cookie_source(self):
+        cookiefile = self._first_extractor_arg(self._eporner_extractor_args(), 'cookiefile')
+        if cookiefile:
+            return cookiefile, 'extractor-arg cookiefile'
+
+        for env_var in ('YTDLP_EPORNER_COOKIEFILE', 'EPORNER_COOKIEFILE', 'EPORNER_COOKIE_FILE'):
+            cookiefile = os.environ.get(env_var)
+            if cookiefile:
+                return cookiefile, env_var
+
+        for env_var in ('YTDLP_EPORNER_COOKIES_B64', 'EPORNER_COOKIES_B64'):
+            cookie_data_b64 = os.environ.get(env_var)
+            if cookie_data_b64:
+                try:
+                    return base64.b64decode(cookie_data_b64).decode(), env_var
+                except Exception as error:
+                    raise ExtractorError(f'Unable to decode eporner cookies from {env_var}: {error}', expected=True)
+
+        for env_var in ('YTDLP_EPORNER_COOKIES', 'EPORNER_COOKIES'):
+            cookie_source = os.environ.get(env_var)
+            if cookie_source:
+                return cookie_source, env_var
+
+        return None, None
+
+    def _load_eporner_cookiejar(self, cookie_source, source_name):
+        if self._looks_like_cookie_data(cookie_source):
+            cookie_data = self._normalise_cookie_data(cookie_source)
+            tmp_cookiefile = None
+            try:
+                with tempfile.NamedTemporaryFile('w', encoding='utf-8', delete=False) as tmp:
+                    tmp.write(cookie_data)
+                    tmp_cookiefile = tmp.name
+                jar = YoutubeDLCookieJar(tmp_cookiefile)
+                jar.load(ignore_discard=True, ignore_expires=True)
+            except OSError as error:
+                raise ExtractorError(f'Unable to load eporner cookies from {source_name}: {error}', expected=True)
+            finally:
+                if tmp_cookiefile:
+                    try:
+                        os.remove(tmp_cookiefile)
+                    except OSError:
+                        pass
+            return jar
+
+        cookiefile = os.path.expanduser(cookie_source)
         jar = YoutubeDLCookieJar(cookiefile)
         try:
             jar.load(ignore_discard=True, ignore_expires=True)
         except OSError as error:
             raise ExtractorError(f'Unable to load eporner cookie file {cookiefile!r}: {error}', expected=True)
+        return jar
 
+    def _real_initialize(self):
+        cookie_source, source_name = self._eporner_cookie_source()
+        if not cookie_source:
+            return
+
+        jar = self._load_eporner_cookiejar(cookie_source, source_name)
         cookie_count = 0
         for cookie in jar:
             if (cookie.domain or '').lstrip('.').lower().endswith('eporner.com'):
@@ -81,9 +140,9 @@ class EpornerIE(InfoExtractor):
                 cookie_count += 1
 
         if cookie_count:
-            self.write_debug(f'Loaded {cookie_count} eporner cookies from {cookiefile!r}')
+            self.write_debug(f'Loaded {cookie_count} eporner cookies from {source_name}')
         else:
-            self.report_warning(f'No eporner.com cookies found in {cookiefile!r}')
+            self.report_warning(f'No eporner.com cookies found in {source_name}')
 
     def _real_extract(self, url):
         mobj = self._match_valid_url(url)
