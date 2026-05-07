@@ -1,4 +1,7 @@
+import os
+
 from .common import InfoExtractor
+from ..cookies import YoutubeDLCookieJar
 from ..utils import (
     ExtractorError,
     encode_base_n,
@@ -44,12 +47,51 @@ class EpornerIE(InfoExtractor):
         'only_matching': True,
     }]
 
+    @staticmethod
+    def _first_extractor_arg(args, key):
+        values = args.get(key)
+        if isinstance(values, (list, tuple)):
+            return values[0] if values else None
+        return values
+
+    def _eporner_extractor_args(self):
+        return (self.get_param('extractor_args') or {}).get('eporner') or {}
+
+    def _eporner_impersonate(self):
+        return self._first_extractor_arg(self._eporner_extractor_args(), 'impersonate')
+
+    def _real_initialize(self):
+        cookiefile = self._first_extractor_arg(self._eporner_extractor_args(), 'cookiefile')
+        if not cookiefile:
+            cookiefile = os.environ.get('YTDLP_EPORNER_COOKIES') or os.environ.get('EPORNER_COOKIES')
+        if not cookiefile:
+            return
+
+        cookiefile = os.path.expanduser(cookiefile)
+        jar = YoutubeDLCookieJar(cookiefile)
+        try:
+            jar.load(ignore_discard=True, ignore_expires=True)
+        except OSError as error:
+            raise ExtractorError(f'Unable to load eporner cookie file {cookiefile!r}: {error}', expected=True)
+
+        cookie_count = 0
+        for cookie in jar:
+            if (cookie.domain or '').lstrip('.').lower().endswith('eporner.com'):
+                self.cookiejar.set_cookie(cookie)
+                cookie_count += 1
+
+        if cookie_count:
+            self.write_debug(f'Loaded {cookie_count} eporner cookies from {cookiefile!r}')
+        else:
+            self.report_warning(f'No eporner.com cookies found in {cookiefile!r}')
+
     def _real_extract(self, url):
         mobj = self._match_valid_url(url)
         video_id = mobj.group('id')
         display_id = mobj.group('display_id') or video_id
+        impersonate = self._eporner_impersonate()
 
-        webpage, urlh = self._download_webpage_handle(url, display_id)
+        webpage, urlh = self._download_webpage_handle(url, display_id, impersonate=impersonate)
 
         video_id = self._match_id(urlh.url)
 
@@ -71,7 +113,7 @@ class EpornerIE(InfoExtractor):
                 'device': 'generic',
                 'domain': 'www.eporner.com',
                 'fallback': 'false',
-            })
+            }, impersonate=impersonate)
 
         if video.get('available') is False:
             raise ExtractorError(
@@ -114,6 +156,10 @@ class EpornerIE(InfoExtractor):
                             'fps': fps,
                             'vcodec': 'av1',
                         })
+
+        if impersonate:
+            for f in formats:
+                f.setdefault('impersonate', impersonate)
 
         json_ld = self._search_json_ld(webpage, display_id, default={})
 
